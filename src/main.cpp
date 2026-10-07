@@ -1,8 +1,16 @@
 #include <iostream>
 #include <omp.h>
+#include "mmio.hpp"
 
 int main() {
-    std::cout << "spmv-inspect baslatildi!" << std::endl;
-    std::cout << "Maksimum Kullanilabilir Thread: " << omp_get_max_threads() << std::endl;
+    COOMatrix mat = read_matrix("samples/tiny.mtx");
+    std::cout << "Matrix read with success" << std::endl;
+    std::cout << "Row: " << mat.num_rows 
+              << ", col: " << mat.num_cols 
+              << ", NNZ: " << mat.nnz << std::endl;
+
+    for (const auto& el : mat.elements) {
+        std::cout << "(" << el.row << ", " << el.col << ") -> " << el.val << "\n";
+    }
     return 0;
 }

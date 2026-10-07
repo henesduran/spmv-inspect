@@ -1,0 +1,6 @@
+%%MatrixMarket matrix coordinate real general
+% Test 3x3 matrix
+3 3 3
+1 2 5.0
+3 1 8.0
+3 3 9.0
