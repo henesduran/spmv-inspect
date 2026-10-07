@@ -23,7 +23,7 @@ struct COOMatrix {
     COOMatrix(int num_rows,int num_cols,size_t nnz,std::vector<COOElement> elmnts): num_rows(num_rows),num_cols(num_cols),nnz(nnz),elements(elmnts){}
 };
 
-COOMatrix read_matrix(const std::string& filepath){
+inline COOMatrix read_matrix(const std::string& filepath){
     std::ifstream file(filepath);
     if(!file.is_open()){
         throw std::runtime_error("Cannot open file: " + filepath);
@@ -55,8 +55,5 @@ COOMatrix read_matrix(const std::string& filepath){
     }
 
     return COOMatrix(num_rows,num_cols,elements.size(),elements);
-
-
-
 
 }
