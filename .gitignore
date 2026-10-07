@@ -1,0 +1,19 @@
+# CMake
+build/
+bin/
+
+#compiler
+*.o
+*.obj
+*.exe
+*.out
+
+# ide
+.vscode/
+.idea/
+*.swp
+
+# data
+data/
+downloads/
+*.tar.gz
