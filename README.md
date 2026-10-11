@@ -31,7 +31,7 @@ Toy 3x3 Example Matrix                   CSR Format (Zero-Copy Move Semantics)
 +-------------------------------+       +-------------------------------------+
 ```
 
-*For large-scale networks such as `ca-HepPh` (12,008 x 12,008, 99.8% sparsity), CSR compresses the dense memory footprint from ~1.15 GB down to ~2.94 MB, enabling the entire working set to fit within CPU L3 cache.*
+*For large-scale networks such as `ca-HepPh` (12,008 x 12,008, 99.8% sparsity), CSR compresses the dense memory footprint from ~1.15 GB down to ~2.94 MB, enabling the working set to fit within CPU cache.*
 
 * **`values`:** Non-zero values array (size $NNZ$).
 * **`col_idx`:** Column index for each non-zero element (size $NNZ$).
@@ -51,7 +51,7 @@ Thread 1 (Slow) : [==================== Work ===================] --> Measures T
 ```
 
 ### Workload-Aware Partitioning: NNZ-Balanced Partitioning
-Standard row-based static partitioning divides $M$ rows uniformly among $P$ threads ($\approx M/P$ rows/thread). In power-law graphs with skewed degree distributions (e.g., social, citation, and web networks), hub nodes concentrate thousands of non-zero entries into a handful of rows. This causes severe thread load imbalance ($\lambda \gg 0$) under naive static scheduling.
+Standard row-based static partitioning divides $M$ rows uniformly among $P$ threads ($\approx M/P$ rows/thread). When row non-zero counts vary significantly across a matrix, naive row-static scheduling can cause thread load imbalance ($\lambda > 0$).
 
 `spmv-inspect` implements **NNZ-Balanced Static Partitioning** by partitioning non-zero entries (`NNZ`) equally rather than rows:
 * **Target Non-Zeros per Thread:** `target_nnz = (i * NNZ) / P` for thread partition $i \in [1, P-1]$.
@@ -77,7 +77,7 @@ Evaluated on **AMD Ryzen 7 8845HS (Zen 4, 8 Cores / 16 Threads, 16 MB L3 Cache)*
 > **Methodology:** Every test executes **10 untimed warmup iterations** followed by **50 timed measurement iterations**. Reported figures represent per-thread **Medians and Standard Deviations ($\pm \sigma$)**, filtering out OS scheduling interrupts and cold-cache effects.
 
 ### 1. Structural FEM Matrix: `bcsstk17.mtx` (Structural Engineering)
-* **Dimensions:** 10,974 x 10,974 | **NNZ:** 428,650 | **Sparsity:** 99.64% | **Working Set:** 5.11 MB (Fits in 16 MB L3)
+* **Dimensions:** 10,974 x 10,974 | **NNZ:** 428,650 | **Sparsity:** 99.64% | **Working Set:** 5.11 MB (Cache-resident working set)
 
 ```text
 Platform: AMD Ryzen 7 8845HS w/ Radeon 780M Graphics
@@ -104,14 +104,14 @@ Thread 15 : [#############       ] 0.0133 ms  (± 0.0000 ms)
   Average Time   (T_avg) : 0.0164 ms
   Load Imbalance (λ)     : 0.1802
   Compute Throughput     : 42.8500 GFLOP/s
-  Effective Bandwidth    : 268.0704 GB/s (L3 Cache-Resident)
+  Effective Bandwidth    : 268.0704 GB/s (Cache-Resident)
   Peak Memory (RSS)      : 16.0625 MB
 ```
 
 ---
 
 ### 2. Irregular Power-Law Graph: `ca-HepPh.mtx` (ArXiv Collaboration Network)
-* **Dimensions:** 12,008 x 12,008 | **NNZ:** 237,010 | **Sparsity:** 99.83% | **Working Set:** 2.94 MB (Fits in 16 MB L3)
+* **Dimensions:** 12,008 x 12,008 | **NNZ:** 237,010 | **Sparsity:** 99.83% | **Working Set:** 2.94 MB (Cache-resident working set)
 
 #### Method 1: Naive Row-Static Scheduling (`schedule(static)`)
 Equal row counts ($M / P$) assigned regardless of graph topology:
@@ -120,20 +120,20 @@ Thread Execution Times (Median ± StdDev):
 Thread  0 : [#############       ] 0.0116 ms  (± 0.0020 ms)
 Thread  1 : [##################  ] 0.0155 ms  (± 0.0013 ms)
 ...
-Thread  6 : [################### ] 0.0168 ms  (± 0.0215 ms)  <-- Hub node bottleneck
+Thread  6 : [################### ] 0.0168 ms  (± 0.0215 ms)
 ...
-Thread 14 : [#############       ] 0.0114 ms  (± 0.0021 ms)  <-- Starving thread
+Thread 14 : [#############       ] 0.0114 ms  (± 0.0021 ms)
 ...
 [METRICS (Median Across 50 Iterations)]
   Execution Time (T_max) : 0.0169 ms
   Average Time   (T_avg) : 0.0134 ms
   Load Imbalance (λ)     : 0.2041
   Compute Throughput     : 28.1301 GFLOP/s
-  Effective Bandwidth    : 183.0327 GB/s (L3 Cache-Resident)
+  Effective Bandwidth    : 183.0327 GB/s (Cache-Resident)
 ```
 
 #### Method 2: Dynamic Scheduling (`schedule(dynamic, 16)`)
-OpenMP dynamic chunk scheduling mitigates static row skew but incurs atomic loop counter coordination overhead:
+OpenMP dynamic chunk scheduling (`chunk_size: 16`):
 ```text
 Thread Execution Times (Median ± StdDev):
 Thread  0 : [#################   ] 0.0212 ms  (± 0.0142 ms)
@@ -142,11 +142,11 @@ Thread  1 : [################### ] 0.0229 ms  (± 0.0035 ms)
 Thread 15 : [################### ] 0.0230 ms  (± 0.0042 ms)
 
 [METRICS (Median Across 50 Iterations)]
-  Execution Time (T_max) : 0.0237 ms  (Higher latency due to chunk coordination overhead)
+  Execution Time (T_max) : 0.0237 ms
   Average Time   (T_avg) : 0.0201 ms
   Load Imbalance (λ)     : 0.1493
   Compute Throughput     : 20.0224 GFLOP/s
-  Effective Bandwidth    : 130.2787 GB/s (L3 Cache-Resident)
+  Effective Bandwidth    : 130.2787 GB/s (Cache-Resident)
 ```
 
 #### Method 3: NNZ-Balanced Static Partitioning (`ScheduleType::NnzBalanced`)
@@ -163,7 +163,7 @@ Thread 10 : [################### ] 0.0141 ms  (± 0.0001 ms)
   Average Time   (T_avg) : 0.0137 ms
   Load Imbalance (λ)     : 0.0238  (88.3% Imbalance Reduction vs Static)
   Compute Throughput     : 33.6758 GFLOP/s
-  Effective Bandwidth    : 219.1165 GB/s (L3 Cache-Resident)
+  Effective Bandwidth    : 219.1165 GB/s (Cache-Resident)
 ```
 
 ### Comparative Evaluation Across Matrix Topologies:
@@ -178,8 +178,8 @@ Thread 10 : [################### ] 0.0141 ms  (± 0.0001 ms)
 | | **NNZ-Balanced** | **0.0141 ms** | 0.0137 ms | **0.0238** | **33.68** |
 
 #### Key Architectural Findings:
-* **Consistent Imbalance Reduction:** In `bcsstk17`, structural boundary nodes connect to fewer elements than interior junction nodes, producing moderate static imbalance ($\lambda = 0.1802$). In `ca-HepPh`, high-degree hub nodes create severe row skew ($\lambda = 0.2041$). Across both topologies, NNZ-balanced partitioning resolves degree variance and lowers load imbalance down to $\lambda \approx 0.024 - 0.025$.
-* **Dynamic Scheduling Overhead:** For small, cache-resident working sets completing in $< 0.03$ ms, OpenMP `schedule(dynamic)` exhibits 1.5x–1.8x higher execution latency due to centralized atomic iteration counter coordination compared to pre-partitioned static strategies.
+* **Static Imbalance & NNZ Balancing:** Static imbalance on `bcsstk17` ($\lambda = 0.18$) is consistent with non-uniform non-zeros per row; row-level statistics were not collected. `ca-HepPh` exhibits similar static imbalance ($\lambda = 0.20$). Across both topologies, NNZ-balanced partitioning reduces load imbalance down to $\lambda \approx 0.024 - 0.025$.
+* **Dynamic Scheduling:** Dynamic scheduling was 1.4x to 1.6x slower than static here. The cause was not isolated; likely contributors are chunk dispatch overhead and loss of per-thread data affinity between iterations.
 
 ---
 
@@ -195,9 +195,9 @@ Strong scaling evaluation across 16 threads compared to the sequential single-th
 | **NNZ-Balanced** | 16 | **0.0141 ms** | **33.68 GFLOP/s** | **$9.78\times$** | **61.1%** |
 
 #### Key Insights:
-1. **NNZ-Balanced Speedup ($9.78\times$):** By eliminating idle barrier waiting times across threads, NNZ-balanced partitioning achieves $9.78\times$ speedup on an 8-core / 16-thread processor ($61.1\%$ parallel efficiency across 16 hardware SMT threads).
-2. **Scheduling Trade-off:** Naive row-static scheduling leaves threads waiting on hub-heavy partitions ($8.16\times$ speedup), while dynamic scheduling suffers from atomic iteration counter contention on sub-millisecond cache-resident chunks ($5.82\times$ speedup).
-3. **Reference Single-Thread Latency:** For reference, a single-threaded SciPy CSR run (`scipy.sparse.csr_matrix.dot`) executes in ~0.147 ms on the same machine, confirming that the single-threaded C++ baseline (0.1379 ms) delivers expected bare-metal performance. Note that per-thread timers measure pure compute duration inside the OpenMP parallel construct, excluding outer thread fork/join overhead.
+1. **NNZ-Balanced Speedup ($9.78\times$):** NNZ-balanced partitioning achieves $9.78\times$ speedup ($61.1\%$ parallel efficiency relative to 16 threads). The 9.78x figure exceeds the 8 physical cores; SMT and cache effects were not isolated in this study.
+2. **Scheduling Trade-off:** Naive row-static scheduling exhibits static imbalance ($8.16\times$ speedup), while dynamic scheduling was 1.4x to 1.6x slower than static ($5.82\times$ speedup), where likely contributors are chunk dispatch overhead and loss of per-thread data affinity between iterations.
+3. **Reference Single-Thread Latency:** For reference, a single-threaded SciPy CSR run (`scipy.sparse.csr_matrix.dot`) executes in ~0.147 ms on the same machine, comparable to SciPy’s single-thread run. Note that per-thread timers measure compute duration inside the OpenMP parallel construct, excluding outer thread fork/join overhead.
 
 ---
 
@@ -212,8 +212,8 @@ Strong Scaling (S)  = T_1 / T_P
 Parallel Efficiency = (S / P) * 100%
 ```
 
-* **`T_max` & `T_avg`:** Computed as the median of per-iteration maximum and average thread runtimes across timed benchmark iterations, measuring pure barrier-to-barrier parallel execution latency.
-* **Effective Bandwidth:** Quantifies compulsory algorithmic stream traffic. For cache-resident working sets ($\le 16$ MB L3), this measures on-chip L3 throughput rather than physical DRAM bus saturation.
+* **`T_max` & `T_avg`:** `T_max` is the median of the slowest thread’s compute time per iteration, excluding fork/join and start-time skew between threads. For dynamic scheduling, per-thread durations may reflect thread start skew rather than work imbalance.
+* **Effective Bandwidth:** Quantifies compulsory algorithmic stream traffic. For cache-resident working sets, this measures on-chip cache throughput rather than physical DRAM bus saturation.
 * **Physical Memory Footprint (RSS):** Queried directly from the Linux kernel using POSIX `getrusage(RUSAGE_SELF, &usage)` via `usage.ru_maxrss`.
 
 ---

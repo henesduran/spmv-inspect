@@ -90,7 +90,7 @@ inline void print_benchmark_report(
     std::cout << "\n";
     std::cout << "  Compute Throughput     : " << gflops << " GFLOP/s\n";
     std::cout << "  Effective Bandwidth    : " << bandwidth_gb_s << " GB/s ("
-              << (working_set_mb <= 16.0 ? "L3 Cache-Resident" : "DRAM-Bound") << ")\n";
+              << (working_set_mb <= 16.0 ? "Cache-Resident" : "DRAM-Bound") << ")\n";
     std::cout << "  Peak Memory (RSS)      : " << peak_memory_mb << " MB\n";
 }
 
