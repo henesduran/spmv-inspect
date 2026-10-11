@@ -2,6 +2,7 @@
 #include <vector>
 #include <sys/resource.h>
 
+namespace spmv {
 struct Metrics {
     double t_max;
     double t_min;
@@ -43,4 +44,6 @@ inline double get_peak_memory_mb(){
         return usage.ru_maxrss / 1024.0;
     }
     return 0.0;
+}
+
 }

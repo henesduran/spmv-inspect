@@ -7,6 +7,8 @@
 #include "metrics.hpp"
 #include "reporter.hpp"
 
+using namespace spmv;
+
 int main(int argc,char* argv[]) {
     std::string filename = "samples/tiny.mtx";
     int num_threads = omp_get_max_threads();

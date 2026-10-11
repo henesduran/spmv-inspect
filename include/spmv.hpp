@@ -4,6 +4,7 @@
 #include <omp.h>
 #include "csr_matrix.hpp"
 
+namespace spmv {
 enum class ScheduleType {
     Static,
     Dynamic
@@ -36,13 +37,13 @@ inline SpMVResult spmv_csr(const CSRMatrix &A,
 
         if(sched == ScheduleType::Static){
             #pragma omp for schedule(static)
-            for (size_t i = 0; i < A.num_rows; i++)
+            for (int i = 0; i < A.num_rows; i++)
             {
                 double sum = 0.0;
                 int row_start = A.row_ptr[i];
                 int row_end = A.row_ptr[i+1];
                 
-                for (size_t j =row_start ; j < row_end; j++)
+                for (int j =row_start ; j < row_end; j++)
                 {
                     int col = A.col_idx[j];
                     double val = A.values[j];
@@ -54,13 +55,13 @@ inline SpMVResult spmv_csr(const CSRMatrix &A,
             }
         }else{
             #pragma omp for schedule(dynamic,chunk_size)
-            for (size_t i = 0; i < A.num_rows; i++)
+            for (int i = 0; i < A.num_rows; i++)
             {
                 double sum = 0.0;
                 int row_start = A.row_ptr[i];
                 int row_end = A.row_ptr[i+1];
                 
-                for (size_t j =row_start ; j < row_end; j++)
+                for (int j =row_start ; j < row_end; j++)
                 {
                     int col = A.col_idx[j];
                     double val = A.values[j];
@@ -78,6 +79,5 @@ inline SpMVResult spmv_csr(const CSRMatrix &A,
     }
 
     return SpMVResult(y,thread_times);
-
-    
+}
 }

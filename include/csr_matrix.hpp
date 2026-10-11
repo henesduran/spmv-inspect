@@ -4,6 +4,8 @@
 #include <algorithm>
 #include "mmio.hpp"
 
+namespace spmv {
+
 struct CSRMatrix {
     int num_rows = 0;
     int num_cols = 0;
@@ -13,19 +15,16 @@ struct CSRMatrix {
     std::vector<int> col_idx;
     std::vector<double> values;
 
-    CSRMatrix(int num_r,int num_c,size_t nnz, std::vector<int> row_Ptr,std::vector<int> col_Idx,std::vector<double> vals): num_rows(num_r),num_cols(num_c),nnz(nnz),row_ptr(row_Ptr),col_idx(col_Idx),values(vals){}
+    CSRMatrix(int num_r,int num_c,size_t nnz, std::vector<int> row_Ptr,std::vector<int> col_Idx,std::vector<double> vals): num_rows(num_r),num_cols(num_c),nnz(nnz),row_ptr(std::move(row_Ptr)),col_idx(std::move(col_Idx)),values(std::move(vals)){}
 };
 
-inline bool compare(COOElement &a,COOElement &b){
-    if(a.row != b.row){
-        return a.row < b.row;
-    }
-    return a.col < b.col;
-}
 
 inline CSRMatrix coo_to_csr(COOMatrix &coo){
 
-    std::sort(coo.elements.begin(),coo.elements.end(),compare);
+    std::sort(coo.elements.begin(), coo.elements.end(), [](const COOElement& a, const COOElement& b) {
+    if (a.row != b.row) return a.row < b.row;
+        return a.col < b.col;
+});
 
     std::vector<int> row_ptr(coo.num_rows+1,0);
     std::vector<int> col_idx;
@@ -44,6 +43,6 @@ inline CSRMatrix coo_to_csr(COOMatrix &coo){
     {
         row_ptr[i+1] += row_ptr[i];
     }
-
-    return CSRMatrix(coo.num_rows,coo.num_cols,coo.nnz,row_ptr,col_idx,values);
+    return CSRMatrix(coo.num_rows, coo.num_cols, coo.elements.size(), std::move(row_ptr), std::move(col_idx), std::move(values));
 }   
+}

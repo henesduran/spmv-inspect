@@ -8,6 +8,7 @@
 #include "spmv.hpp"
 #include "metrics.hpp"
 
+namespace spmv {
 
 inline void print_report(
     const std::string& matrix_name,
@@ -60,4 +61,5 @@ inline void print_report(
     std::cout << "  Throughput             : " << gflops << " GFLOP/s" << std::endl;
     std::cout << "  Memory Bandwidth       : " << bandwidth_gb_s << " GB/s" << std::endl;
     std::cout << "  Peak Memory (RSS)      : " << peak_memory_mb << " MB" << std::endl;
+}
 }

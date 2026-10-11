@@ -6,6 +6,8 @@
 #include <sstream>
 #include <stdexcept>
 
+namespace spmv{
+    
 struct COOElement {
     int row;
     int col;
@@ -20,7 +22,7 @@ struct COOMatrix {
     size_t nnz = 0;
     std::vector<COOElement> elements;
 
-    COOMatrix(int num_rows,int num_cols,size_t nnz,std::vector<COOElement> elmnts): num_rows(num_rows),num_cols(num_cols),nnz(nnz),elements(elmnts){}
+    COOMatrix(int num_rows,int num_cols,size_t nnz,std::vector<COOElement> elmnts): num_rows(num_rows),num_cols(num_cols),nnz(nnz),elements(std::move(elmnts)){}
 };
 
 inline COOMatrix read_matrix(const std::string& filepath){
@@ -31,6 +33,7 @@ inline COOMatrix read_matrix(const std::string& filepath){
     std::string line;
     std::getline(file,line);
     bool is_symmetric = line.find("symmetric") != std::string::npos;
+    bool is_pattern = line.find("pattern") != std::string::npos;
     
     while(getline(file,line)){
         if(line[0] != '%') break;
@@ -44,16 +47,25 @@ inline COOMatrix read_matrix(const std::string& filepath){
     elements.reserve(is_symmetric ? nnz * 2 : nnz);
 
     int r,c;
-    double val;
+    double val = 1.0;
 
-    while(file >> r >> c >> val){
-        elements.push_back(COOElement(r-1,c-1,val));
-
-        if(is_symmetric && r != c){
-            elements.push_back(COOElement(c-1,r-1,val));
+    if (is_pattern) {
+        while (file >> r >> c) {
+            elements.push_back(COOElement(r - 1, c - 1, 1.0));
+            if (is_symmetric && r != c) {
+                elements.push_back(COOElement(c - 1, r - 1, 1.0));
+            }
+        }
+    } else {
+        while (file >> r >> c >> val) {
+            elements.push_back(COOElement(r - 1, c - 1, val));
+            if (is_symmetric && r != c) {
+                elements.push_back(COOElement(c - 1, r - 1, val));
+            }
         }
     }
 
-    return COOMatrix(num_rows,num_cols,elements.size(),elements);
+    return COOMatrix(num_rows,num_cols,elements.size(),std::move(elements));
 
+}
 }
