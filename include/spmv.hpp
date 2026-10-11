@@ -37,10 +37,11 @@ inline SpMVResult spmv_csr(const CSRMatrix &A,
     #pragma omp parallel num_threads(num_threads)
     {
         int t_id = omp_get_thread_num();
+        #pragma omp barrier
         double t_start = omp_get_wtime();
 
-        if(sched == ScheduleType::Static){
-            #pragma omp for schedule(static)
+        if (sched == ScheduleType::Static) {
+            #pragma omp for schedule(static) nowait
             for (int i = 0; i < A.num_rows; i++)
             {
                 double sum = 0.0;
@@ -57,8 +58,8 @@ inline SpMVResult spmv_csr(const CSRMatrix &A,
                 y[i] = sum;
                 
             }
-        }else{
-            #pragma omp for schedule(dynamic,chunk_size)
+        } else {
+            #pragma omp for schedule(dynamic, chunk_size) nowait
             for (int i = 0; i < A.num_rows; i++)
             {
                 double sum = 0.0;

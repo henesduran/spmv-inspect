@@ -13,7 +13,8 @@ Sparse Matrix-Vector Multiplication ($y = A \cdot x$) is one of the most critica
 1. **Thread-Level Load Imbalance ($\lambda$):** Quantifies work distribution across CPU cores in real-world graphs.
 2. **Scheduling Trade-offs:** Benchmarks `static` versus `dynamic` OpenMP work-sharing on uniform versus power-law sparse matrices.
 3. **False Sharing Avoidance:** Employs thread-isolated timing registers to prevent L1/L2 cache-line invalidation storms.
-4. **Hardware Performance Metrics:** Computes GFLOP/s compute throughput, memory bandwidth (GB/s), and queries Linux kernel physical resident memory (RSS via `getrusage`).
+4. **Barrier Wait-Time Isolation (`nowait`):** Eliminates OpenMP worksharing implicit barriers to measure pure CPU compute time rather than idle barrier synchronization wait.
+5. **Hardware Performance Metrics:** Computes GFLOP/s compute throughput, memory bandwidth (GB/s), and queries Linux kernel physical resident memory (RSS via `getrusage`).
 
 ---
 
@@ -36,6 +37,19 @@ Dense Matrix (12,008 x 12,008)          CSR Format (Zero-Copy Move Semantics)
 * **`col_idx`:** Column index for each non-zero element (size $NNZ$).
 * **`row_ptr`:** Index pointer indicating where each row starts and ends in `values` (size $M + 1$).
 
+### Barrier Synchronization & `nowait` Isolation
+Standard OpenMP `#pragma omp for` directives introduce an implicit synchronization barrier at the end of the loop construct. Fast worker threads are blocked at this barrier until the slowest thread completes, which severely contaminates per-thread timing metrics with idle waiting time. `spmv-inspect` synchronizes all threads prior to kernel start via `#pragma omp barrier` and appends `nowait` to work-sharing loops:
+
+```text
+Without nowait (Contaminated with Barrier Wait Time):
+Thread 0 (Fast) : [==== Work ====][..... Idle Barrier Wait .....] --> Measures T_max (Skewed!)
+Thread 1 (Slow) : [==================== Work ===================] --> Measures T_max
+
+With nowait & Entry Barrier (Pure Computation Time):
+Thread 0 (Fast) : [==== Work ====] --> Measures T_0 (Pure Work!)
+Thread 1 (Slow) : [==================== Work ===================] --> Measures T_1 (Bottleneck!)
+```
+
 ---
 
 ## Benchmark Results (16 Threads Showdown)
@@ -54,19 +68,30 @@ Non-Zero Elements: 428650
 Sparsity: 99.6441%
 
 Thread Execution Times:
-Thread  0 : [################### ] 0.903 ms
-Thread  1 : [################### ] 0.896 ms
-...
-Thread 14 : [################### ] 0.903 ms
-Thread 15 : [##################  ] 0.829 ms
+Thread  0 : [#####               ] 0.151 ms
+Thread  1 : [###########         ] 0.324 ms
+Thread  2 : [########            ] 0.240 ms
+Thread  3 : [######              ] 0.191 ms
+Thread  4 : [##################  ] 0.498 ms
+Thread  5 : [############        ] 0.332 ms
+Thread  6 : [##########          ] 0.291 ms
+Thread  7 : [###                 ] 0.094 ms
+Thread  8 : [##################  ] 0.507 ms
+Thread  9 : [#########           ] 0.266 ms
+Thread 10 : [####################] 0.548 ms
+Thread 11 : [##                  ] 0.065 ms
+Thread 12 : [##########          ] 0.282 ms
+Thread 13 : [######              ] 0.173 ms
+Thread 14 : [##############      ] 0.397 ms
+Thread 15 : [#####               ] 0.155 ms
 
 [METRICS]
-  Execution Time (T_max) : 0.904 ms
-  Average Time   (T_avg) : 0.865 ms
-  Load Imbalance (λ)     : 0.0426  (Near-perfect balance!)
-  Throughput             : 0.948 GFLOP/s
-  Memory Bandwidth       : 5.930 GB/s
-  Peak Memory (RSS)      : 25.88 MB
+  Execution Time (T_max) : 0.548 ms
+  Average Time   (T_avg) : 0.282 ms
+  Load Imbalance (λ)     : 0.4845  [WARN: HIGH LOAD IMBALANCE!]
+  Throughput             : 1.563 GFLOP/s
+  Memory Bandwidth       : 9.782 GB/s
+  Peak Memory (RSS)      : 16.15 MB
 ```
 
 ---
@@ -75,7 +100,7 @@ Thread 15 : [##################  ] 0.829 ms
 * **Dimensions:** 12,008 x 12,008 | **NNZ:** 237,010 | **Sparsity:** 99.83%
 
 #### Static Scheduling (`schedule(static)`): Severe Imbalance
-Thread 15 was statically assigned dense "hub" author nodes, while other threads idled:
+Thread 6 was statically assigned dense "hub" author nodes, while other threads finished early:
 ```text
 Matrix: data/ca-HepPh/ca-HepPh.mtx
 Threads: 16
@@ -85,21 +110,33 @@ Non-Zero Elements: 237010
 Sparsity: 99.8356%
 
 Thread Execution Times:
-Thread  0 : [                    ] 0.351 ms
-Thread  1 : [##########          ] 3.979 ms
-...
-Thread 15 : [####################] 7.558 ms  <-- 21x slower than Thread 0!
+Thread  0 : [######              ] 0.028 ms
+Thread  1 : [#####               ] 0.020 ms
+Thread  2 : [####                ] 0.019 ms
+Thread  3 : [#####               ] 0.023 ms
+Thread  4 : [##############      ] 0.060 ms
+Thread  5 : [####                ] 0.020 ms
+Thread  6 : [####################] 0.081 ms  <-- Dense author hub bottleneck!
+Thread  7 : [####                ] 0.018 ms
+Thread  8 : [######              ] 0.027 ms
+Thread  9 : [####                ] 0.017 ms
+Thread 10 : [####                ] 0.019 ms
+Thread 11 : [#####               ] 0.021 ms
+Thread 12 : [####                ] 0.019 ms
+Thread 13 : [#######             ] 0.028 ms
+Thread 14 : [#######             ] 0.031 ms
+Thread 15 : [######              ] 0.027 ms
 
 [METRICS]
-  Execution Time (T_max) : 7.558 ms
-  Average Time   (T_avg) : 3.976 ms
-  Load Imbalance (λ)     : 0.4739  [WARN: HIGH LOAD IMBALANCE!]
-  Throughput             : 0.062 GFLOP/s
-  Memory Bandwidth       : 0.408 GB/s
+  Execution Time (T_max) : 0.081 ms
+  Average Time   (T_avg) : 0.029 ms
+  Load Imbalance (λ)     : 0.6416  [WARN: HIGH LOAD IMBALANCE!]
+  Throughput             : 5.846 GFLOP/s
+  Memory Bandwidth       : 38.039 GB/s
 ```
 
-#### Dynamic Scheduling (`schedule(dynamic, 16)`): Balanced Execution
-Worker threads dynamically popped 16-row chunks from the task queue, eliminating the bottleneck:
+#### Dynamic Scheduling (`schedule(dynamic, 16)`): Queue Overhead vs Granularity
+For microsecond-scale sparse kernels, dynamic row dispatch redistributes iterations, though queue contention must balance row granularity:
 ```text
 Matrix: data/ca-HepPh/ca-HepPh.mtx
 Threads: 16
@@ -109,27 +146,33 @@ Non-Zero Elements: 237010
 Sparsity: 99.8356%
 
 Thread Execution Times:
-Thread  0 : [####################] 4.335 ms
-Thread  1 : [#################   ] 3.864 ms
+Thread  0 : [##################  ] 0.100 ms
+Thread  1 : [##                  ] 0.015 ms
+Thread  2 : [####################] 0.107 ms
+Thread  3 : [################### ] 0.106 ms
+Thread  4 : [#################   ] 0.094 ms
+Thread  5 : [####                ] 0.021 ms
+Thread  6 : [##############      ] 0.076 ms
 ...
-Thread 15 : [##################  ] 3.911 ms  <-- Load evenly distributed!
 
 [METRICS]
-  Execution Time (T_max) : 4.335 ms
-  Average Time   (T_avg) : 3.949 ms
-  Load Imbalance (λ)     : 0.0889  (Imbalance slashed by 81%!)
-  Throughput             : 0.109 GFLOP/s  (+74% Increase)
-  Memory Bandwidth       : 0.711 GB/s     (+74% Increase)
+  Execution Time (T_max) : 0.107 ms
+  Average Time   (T_avg) : 0.051 ms
+  Load Imbalance (λ)     : 0.5190  [WARN: HIGH LOAD IMBALANCE!]
+  Throughput             : 4.398 GFLOP/s
+  Memory Bandwidth       : 28.618 GB/s
 ```
 
-### Head-to-Head Comparison on `ca-HepPh`:
+### Performance Characteristics & Takeaways:
 
-| Metric | Static Scheduling | Dynamic Scheduling | Improvement |
-| :--- | :--- | :--- | :--- |
-| **Execution Time ($T_{\max}$)** | **7.558 ms** | **4.335 ms** | **42.6% Speedup (1.74x faster)** |
-| **Load Imbalance ($\lambda$)** | **0.4739 (Severe)** | **0.0889 (Balanced)** | **81.2% Reduction** |
-| **Throughput (GFLOP/s)** | **0.062 GFLOP/s** | **0.109 GFLOP/s** | **+74.3%** |
-| **Memory Bandwidth** | **0.408 GB/s** | **0.711 GB/s** | **+74.3%** |
+| Metric | Uniform Mesh (`bcsstk17`) | Power-Law Graph (`ca-HepPh`) |
+| :--- | :--- | :--- |
+| **Matrix Type** | Structural Finite Element | Collaboration Social Graph |
+| **Non-Zero Distribution** | Uniform Banded | Heavy-tailed Hub Nodes |
+| **Max Execution Time ($T_{\max}$)** | **0.548 ms** | **0.081 ms** |
+| **Average Time ($T_{\text{avg}}$)** | **0.282 ms** | **0.029 ms** |
+| **Peak Throughput** | **1.563 GFLOP/s** | **5.846 GFLOP/s** |
+| **Memory Bandwidth** | **9.782 GB/s** | **38.039 GB/s** |
 
 ---
 
