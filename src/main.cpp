@@ -7,15 +7,30 @@
 #include "metrics.hpp"
 #include "reporter.hpp"
 
-int main() {
+int main(int argc,char* argv[]) {
     std::string filename = "samples/tiny.mtx";
+    int num_threads = omp_get_max_threads();
+    ScheduleType sched = ScheduleType::Static;
+
+    if (argc > 1){
+        filename = argv[1];
+    }
+
+    if (argc > 2){
+        num_threads = std::stoi(argv[2]);
+    }
+
+    if (argc > 3){
+        sched = (std::string(argv[3]) == "dynamic") ? ScheduleType::Dynamic : ScheduleType::Static;
+    }
+
     auto coo = read_matrix(filename);
     auto csr = coo_to_csr(coo);
 
     std::vector<double> x(csr.num_cols, 1.0);
 
-    int num_threads = 4;
-    ScheduleType sched = ScheduleType::Static;
+    
+    
 
     auto result = spmv_csr(csr, x, sched, num_threads);
 
