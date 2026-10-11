@@ -2,7 +2,7 @@
 """
 scripts/verify_baseline.py
 --------------------------
-External Baseline & Numerical Verification for spmv-inspect.
+External SciPy CSR Baseline Benchmark for spmv-inspect.
 Benchmarks SciPy's optimized C-accelerated CSR SpMV kernel on the same
 matrix using identical protocol: 10 warmup + 50 timed iterations (Median ± StdDev).
 """

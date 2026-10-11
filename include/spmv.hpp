@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <algorithm>
 #include <omp.h>
 #include <stdexcept>
 #include "csr_matrix.hpp"
