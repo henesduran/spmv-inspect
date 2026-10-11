@@ -23,12 +23,16 @@ inline SpMVResult spmv_csr(const CSRMatrix &A,
                            int num_threads,
                            int chunk_size = 16)
 {
-    std::vector<double> y(A.num_rows,0.0);
-    std::vector<double> thread_times(num_threads);
+    if (num_threads <= 0) {
+        num_threads = 1;
+    }
 
-    if(A.num_cols != x.size()){
+    if (static_cast<size_t>(A.num_cols) != x.size()) {
         throw std::runtime_error("number of cols in matrix must match vector size!");
     }
+
+    std::vector<double> y(A.num_rows, 0.0);
+    std::vector<double> thread_times(num_threads);
 
     #pragma omp parallel num_threads(num_threads)
     {

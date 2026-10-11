@@ -39,7 +39,7 @@ inline CSRMatrix coo_to_csr(COOMatrix &coo){
         row_ptr[el.row+1]++;
     }
 
-    for (size_t i = 0; i < coo.num_rows; i++)
+    for (int i = 0; i < coo.num_rows; ++i)
     {
         row_ptr[i+1] += row_ptr[i];
     }

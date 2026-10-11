@@ -34,12 +34,14 @@ inline void print_report(
     int num_spaces;
 
     std::cout << "Matrix: " << matrix_name << std::endl;
+    std::cout << "Threads: " << num_threads << std::endl;
+    std::cout << "Schedule: " << (sched == ScheduleType::Static ? "STATIC" : "DYNAMIC") << std::endl;
     std::cout << "Dimensions: " << A.num_rows << " x " << A.num_cols << std::endl;
     std::cout << "Non-Zero Elements: " << A.nnz << std::endl;
     std::cout << "Sparsity: " << sparsity << "%" << std::endl;
 
     std::cout << "\nThread Execution Times:" << std::endl;
-    for (size_t i = 0; i < num_threads; i++)
+    for (int i = 0; i < num_threads; ++i)
     {
         double t = results.thread_times[i];
         int num_blocks = (metrics.t_max > 0.0) ? static_cast<int>((t / metrics.t_max) * bar_width) : 0;
