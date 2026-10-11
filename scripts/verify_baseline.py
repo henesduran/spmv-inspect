@@ -11,7 +11,6 @@ import sys
 import time
 import numpy as np
 from scipy.io import mmread
-from scipy.sparse import csr_matrix
 
 def benchmark_scipy_spmv(matrix_path: str, warmup_iters: int = 10, bench_iters: int = 50):
     print(f"Loading matrix: {matrix_path} ...")

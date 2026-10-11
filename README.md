@@ -7,14 +7,13 @@
 
 ## Overview
 
-Sparse Matrix-Vector Multiplication ($y = A \cdot x$) is one of the most critical kernels in High-Performance Computing (HPC), Graph Analytics, and Scientific Computing. Unlike dense matrix multiplication, which is arithmetic-intensive and computationally bound, SpMV is strictly **memory-bandwidth bound** and exhibits **irregular data access patterns**.
+Sparse Matrix-Vector Multiplication ($y = A \cdot x$) is one of the most critical kernels in High-Performance Computing (HPC), Graph Analytics, and Scientific Computing. While SpMV on large-scale sparse graphs is typically memory-bandwidth bound at the DRAM level, small-to-medium graphs ($< 16$ MB) reside entirely in CPU cache hierarchy (L2/L3), shifting the primary performance bottleneck to **thread-level load imbalance ($\lambda$)** and loop scheduling overhead.
 
-`spmv-inspect` is an end-to-end performance inspection tool that analyzes:
-1. **Thread-Level Load Imbalance ($\lambda$):** Quantifies work distribution across CPU cores in real-world graphs.
-2. **Scheduling & Partitioning Trade-offs:** Benchmarks `static` (row-based), `dynamic` (work-stealing), and `nnz` (workload-aware NNZ-balanced static partitioning) on uniform versus power-law sparse matrices.
-3. **False Sharing Avoidance:** Employs thread-isolated timing registers to prevent L1/L2 cache-line invalidation storms.
-4. **Barrier Wait-Time Isolation (`nowait`):** Eliminates OpenMP worksharing implicit barriers to measure pure CPU compute time rather than idle barrier synchronization wait.
-5. **Hardware Performance Metrics:** Computes GFLOP/s compute throughput, memory bandwidth (GB/s), and queries Linux kernel physical resident memory (RSS via `getrusage`).
+`spmv-inspect` is an end-to-end inspection and profiling tool that analyzes:
+1. **Thread-Level Load Imbalance ($\lambda$):** Quantifies work distribution across CPU cores in sparse graphs.
+2. **Scheduling Trade-offs:** Evaluates `static` (row-based), `dynamic` (chunk-based), and `nnz` (workload-aware NNZ-balanced partitioning) strategies.
+3. **Synchronization Overhead Isolation (`nowait`):** Separates pure computation time from barrier wait times.
+4. **Statistical Benchmarking Rigor:** Employs untimed warmup iterations and reports per-iteration medians and variance ($\pm \sigma$) to filter out OS interrupts.
 
 ---
 
@@ -24,14 +23,15 @@ Sparse Matrix-Vector Multiplication ($y = A \cdot x$) is one of the most critica
 Matrix Market files store coordinates in Coordinate (COO) format. `spmv-inspect` parses both weighted (`real`) and unweighted network (`pattern`) matrices, sorts non-zero entries in $O(N \log N)$, and constructs a **Compressed Sparse Row (CSR)** representation using a single-pass histogram and prefix-sum:
 
 ```text
-Dense Matrix (12,008 x 12,008)          CSR Format (Zero-Copy Move Semantics)
+Toy 3x3 Example Matrix                   CSR Format (Zero-Copy Move Semantics)
 +-------------------------------+       +-------------------------------------+
-| 0  5  0                       |       | values   : [5.0, 8.0, 9.0]          |
-| 0  0  0   (>99.8% Zeros!)     | ----> | col_idx  : [1,   0,   2  ]          |
-| 8  0  9                       |       | row_ptr  : [0,   1,   1,  3]        |
+| 0  5.0  0                     |       | values   : [5.0, 8.0, 9.0]          |
+| 0  0    0                     | ----> | col_idx  : [1,   0,   2  ]          |
+| 8.0 0   9.0                   |       | row_ptr  : [0,   1,   1,  3]        |
 +-------------------------------+       +-------------------------------------+
-   Storage: ~1.15 GB in RAM                 Storage: ~5.3 MB in RAM (99.5% saved!)
 ```
+
+*For large-scale networks such as `ca-HepPh` (12,008 x 12,008, 99.8% sparsity), CSR compresses the dense memory footprint from ~1.15 GB down to ~2.94 MB, enabling the entire working set to fit within CPU L3 cache.*
 
 * **`values`:** Non-zero values array (size $NNZ$).
 * **`col_idx`:** Column index for each non-zero element (size $NNZ$).
@@ -53,15 +53,22 @@ Thread 1 (Slow) : [==================== Work ===================] --> Measures T
 ### Workload-Aware Partitioning: NNZ-Balanced Partitioning
 Standard row-based static partitioning divides $M$ rows uniformly among $P$ threads ($\approx \frac{M}{P}$ rows/thread). In power-law graphs with skewed degree distributions (e.g., social, citation, and web networks), hub nodes concentrate thousands of non-zero entries into a handful of rows. This causes severe thread load imbalance ($\lambda \gg 0$) under naive static scheduling.
 
-`spmv-inspect` implements **NNZ-Balanced Static Partitioning** by partitioning the non-zero elements ($NNZ$) equally rather than rows:
-$$\text{target\_nnz}_i = \left\lfloor \frac{i \times NNZ}{P} \right\rfloor \quad \text{for } i \in [1, P-1]$$
+`spmv-inspect` implements **NNZ-Balanced Static Partitioning** by partitioning non-zero entries ($NNZ$) equally rather than rows:
+$$\tau_i = \left\lfloor \frac{i \cdot NNZ}{P} \right\rfloor \quad \text{for } i \in [1, P-1]$$
 
-Since the CSR `row_ptr` array is monotonically non-decreasing, we compute optimal row boundaries using a left binary search (`std::lower_bound`) on `row_ptr` in $O(P \log M)$ precomputation time:
-$$\text{bounds}[i] = \text{std::lower\_bound}(\text{row\_ptr.begin}(), \text{row\_ptr.end}(), \text{target\_nnz}_i) - \text{row\_ptr.begin}()$$
+Because the CSR `row_ptr` prefix-sum array is monotonically non-decreasing, partition boundaries are determined via binary search in $O(P \log M)$ preprocessing time:
+$$\text{bounds}[i] = \min \{ r \in [0, M] \mid \text{row\_ptr}[r] \ge \tau_i \}$$
 
-Thread $t$ executes its assigned row range $[\text{bounds}[t], \text{bounds}[t+1])$ directly. This achieves:
-1. **Zero Runtime Coordination:** Precomputed once before execution; requires zero atomic work queues, locks, or dynamic scheduling overhead.
-2. **Deterministic Arithmetic Balancing:** Every thread performs approximately $\frac{NNZ}{P}$ multiply-accumulate operations, eliminating structural tail latency.
+In C++, this is cleanly implemented using `std::lower_bound`:
+```cpp
+size_t target_nnz = (static_cast<size_t>(i) * A.nnz) / n_threads;
+auto it = std::lower_bound(A.row_ptr.begin(), A.row_ptr.end(), static_cast<int>(target_nnz));
+bounds[i] = static_cast<int>(it - A.row_ptr.begin());
+```
+
+Each thread $t$ directly processes row interval $[\text{bounds}[t], \text{bounds}[t+1])$ without dynamic task queues or runtime lock contention.
+
+> **Boundary Condition:** 1D row-based NNZ partitioning guarantees uniform arithmetic balance provided that the maximum row degree satisfies $d_{\max} \le \frac{NNZ}{P}$. In `ca-HepPh`, $d_{\max} \approx 491 \ll \frac{237,010}{16} \approx 14,813$, ensuring balanced thread chunks without requiring 2D matrix decomposition.
 
 ---
 
@@ -170,42 +177,39 @@ Thread 13 : [####################] 0.0142 ms  (± 0.0012 ms)
   Effective Bandwidth    : 217.9475 GB/s (L3 Cache-Resident)
 ```
 
-### Three-Way Performance Showdown & HPC Trade-offs:
+### Comparative Evaluation & Scheduling Trade-offs:
 
 | Metric | 1. Row-Static | 2. Dynamic | 3. NNZ-Balanced (Workload-Aware) | Architectural Impact |
 | :--- | :---: | :---: | :---: | :--- |
-| **Execution Time ($T_{\max}$)** | 0.0175 ms | 0.0194 ms | **0.0142 ms** | **18.9% faster than Static, 26.8% faster than Dynamic** |
-| **Load Imbalance ($\lambda$)** | 0.1900 | **0.0072** | **0.0253** | **86.7% Imbalance Reduction without dynamic overhead** |
-| **Compute Throughput** | 27.13 GFLOP/s | 24.39 GFLOP/s | **33.50 GFLOP/s** | **Optimal throughput frontier (+6.37 GFLOP/s)** |
-| **Effective Bandwidth** | 176.5 GB/s | 158.7 GB/s | **217.9 GB/s** | **Peak L3 bandwidth saturation** |
-| **Coordination Overhead** | None | High (Atomic queues) | **Zero (Precomputed prefix-sum)** | **No thread contention on work queues** |
+| **Execution Time ($T_{\max}$)** | 0.0175 ms | 0.0194 ms | **0.0142 ms** | 18.9% lower latency vs Static |
+| **Load Imbalance ($\lambda$)** | 0.1900 | **0.0072** | **0.0253** | 86.7% imbalance reduction |
+| **Compute Throughput** | 27.13 GFLOP/s | 24.39 GFLOP/s | **33.50 GFLOP/s** | +6.37 GFLOP/s throughput gain |
+| **Effective Bandwidth** | 176.5 GB/s | 158.7 GB/s | **217.9 GB/s** | Cache-resident throughput |
+| **Loop Scheduling Cost** | Static ($M/P$) | Atomic chunk counter | Precomputed static partition | Zero runtime lock contention |
 
-#### Why Dynamic Scheduling Regressed in Latency ($0.0175 \to 0.0194$ ms):
-While OpenMP dynamic scheduling achieved near-zero arithmetic imbalance ($\lambda = 0.0072$), total runtime increased by $10.9\%$. In sub-millisecond SpMV kernels ($< 0.02$ ms), the atomic memory contention of work-stealing from the central task pool exceeds the computation time saved by balancing rows.
-
-#### Why NNZ-Balanced Dominated Both:
-By mapping the non-zero partition to the monotonically non-decreasing `row_ptr` prefix-sum array, binary search determines non-zero boundaries in $O(P \log M)$ preprocessing time. In the parallel kernel, every worker thread iterates over its designated row span with zero atomic locks and zero branch divergence, simultaneously eliminating both the topological imbalance of static scheduling and the synchronization overhead of dynamic scheduling.
+#### Latency Analysis:
+* **Dynamic Scheduling Overhead at Microsecond Scale:** While OpenMP dynamic scheduling achieved near-zero arithmetic imbalance ($\lambda = 0.0072$), total runtime increased by $10.9\%$ ($0.0175 \to 0.0194$ ms). At sub-millisecond execution times, the coordination cost of centralized atomic loop iteration counters can outweigh the work-balancing gains.
+* **NNZ-Balanced Static Partitioning:** By precomputing non-zero boundaries once outside the parallel region, threads execute deterministic, balanced row spans without dynamic coordination overhead, mitigating both row-degree topological skew and scheduler overhead.
 
 ---
 
-### 3. Industry-Standard Baseline Comparison & Strong Scaling
+### 3. Baseline Verification & Strong Scaling Analysis
 
-To provide an external reference point beyond internal scheduling comparisons, `spmv-inspect` is benchmarked against **SciPy's C-accelerated CSR SpMV kernel** (`scipy.sparse.csr_matrix.dot`) using the identical evaluation protocol (10 warmup + 50 timed iterations, reporting median latency).
+To provide a standard reference point, `spmv-inspect` is benchmarked alongside **SciPy's C-implemented CSR SpMV kernel** (`scipy.sparse.csr_matrix.dot`) using the same evaluation protocol (10 warmup + 50 timed iterations, reporting median latency).
 
 #### Benchmark Configuration: `ca-HepPh.mtx` (12,008 x 12,008 | 237,010 NNZ) on AMD Ryzen 7 8845HS:
 
-| Implementation / Engine | Threads | Median Latency ($T$) | Compute Throughput | Speedup vs SciPy | Strong Scaling ($S = T_1 / T_P$) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **SciPy `csr_matrix` (Industry C-Baseline)** | 1 | 0.1470 ms | 3.23 GFLOP/s | **$1.00\times$ (Baseline)** | — |
-| **`spmv-inspect` (Sequential Baseline)** | 1 | 0.1371 ms | 3.46 GFLOP/s | **$1.07\times$** | **$1.00\times$** |
-| **`spmv-inspect` (Row-Static)** | 16 | 0.0175 ms | 27.13 GFLOP/s | **$8.40\times$** | **$7.83\times$** |
-| **`spmv-inspect` (Dynamic)** | 16 | 0.0194 ms | 24.39 GFLOP/s | **$7.58\times$** | **$7.07\times$** |
-| **`spmv-inspect` (NNZ-Balanced)** | 16 | **0.0142 ms** | **33.50 GFLOP/s** | **$\mathbf{10.35\times}$** | **$\mathbf{9.65\times}$** |
+| Implementation / Engine | Threads | Median Latency ($T$) | Compute Throughput | Notes / Scaling |
+| :--- | :---: | :---: | :---: | :--- |
+| **SciPy `csr_matrix` (C-Kernel)** | 1 | 0.1470 ms | 3.23 GFLOP/s | Single-threaded reference baseline |
+| **`spmv-inspect` (Sequential Baseline)** | 1 | 0.1371 ms | 3.46 GFLOP/s | Single-thread baseline ($1.07\times$ vs SciPy) |
+| **`spmv-inspect` (Row-Static)** | 16 | 0.0175 ms | 27.13 GFLOP/s | $7.83\times$ strong scaling ($S_{16}$) |
+| **`spmv-inspect` (Dynamic)** | 16 | 0.0194 ms | 24.39 GFLOP/s | $7.07\times$ strong scaling ($S_{16}$) |
+| **`spmv-inspect` (NNZ-Balanced)** | 16 | **0.0142 ms** | **33.50 GFLOP/s** | **$9.65\times$ strong scaling ($S_{16}$)** |
 
-#### Key HPC Insights:
-1. **Zero-Overhead Sequential Execution:** At $P = 1$, `spmv-inspect` (0.1371 ms) slightly outperforms SciPy's optimized C kernel (0.1470 ms), demonstrating that the C++20 data structures and loops introduce zero abstraction penalty.
-2. **Superior Strong Scaling ($9.65\times$ on 8C/16T):** On an 8-core / 16-thread Zen 4 processor, NNZ-balanced partitioning achieves a strong scaling speedup of **$9.65\times$** over single-threaded execution ($60.3\%$ parallel efficiency across all 16 SMT hardware threads).
-3. **$10.35\times$ End-to-End Speedup over Industry Standard:** When evaluated against standard Python/SciPy scientific computing pipelines, our thread-level workload-balanced engine delivers over an order-of-magnitude faster SpMV execution.
+#### Key Insights:
+1. **Single-Thread Parity:** At $P = 1$, `spmv-inspect` (0.1371 ms) performs on par with SciPy's compiled C kernel (0.1470 ms), noting that at sub-millisecond latencies, Python function call overhead and result array allocation represent measurable factors.
+2. **Strong Scaling ($9.65\times$ on 8C/16T):** On an 8-core / 16-thread Zen 4 processor, NNZ-balanced partitioning achieves a strong scaling speedup of **$9.65\times$** over single-threaded execution ($60.3\%$ parallel efficiency across 16 hardware SMT threads).
 
 ---
 
@@ -213,15 +217,15 @@ To provide an external reference point beyond internal scheduling comparisons, `
 
 1. **Load Imbalance Factor ($\lambda$):**
    $$\lambda = \frac{T_{\max} - T_{\text{avg}}}{T_{\max}}$$
-   Where $T_{\max} = \max_i(T_i)$ and $T_{\text{avg}} = \frac{1}{P} \sum_{i=0}^{P-1} T_i$.  
-   $\lambda = 0.0$ indicates ideal balance; $\lambda \to 1.0$ indicates total thread serialization.
+   Where $T_{\max} = \text{median}(\text{iter\_max})$ and $T_{\text{avg}} = \text{median}(\text{iter\_avg})$ across timed iterations, measuring barrier-to-barrier execution latency. $\lambda = 0.0$ indicates ideal load balance; $\lambda \to 1.0$ indicates severe thread serialization.
 
 2. **Compute Throughput (GFLOP/s):**
    $$\text{GFLOP/s} = \frac{2 \times NNZ}{T_{\max} \times 10^9}$$
 
-3. **Memory Bandwidth (GB/s):**
+3. **Effective Memory Bandwidth (GB/s):**
    $$\text{Bytes} = (M + 1) \times 4 + NNZ \times (4 + 8) + N \times 8 + M \times 8$$
    $$\text{Bandwidth} = \frac{\text{Bytes}}{T_{\max} \times 10^9}$$
+   *Note: Represents compulsory algorithmic stream traffic. For cache-resident working sets ($\le 16$ MB L3), this quantifies on-chip L3 cache throughput rather than physical DRAM saturation.*
 
 4. **Physical Memory Footprint (RSS):**
    Queried directly from the Linux kernel using `getrusage(RUSAGE_SELF, &usage)` via `usage.ru_maxrss`.

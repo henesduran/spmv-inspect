@@ -34,18 +34,16 @@ inline double calculate_median(std::vector<double> v) {
 }
 
 inline BenchmarkMetrics compute_benchmark_metrics(const std::vector<std::vector<double>> &all_thread_times) {
-    if (all_thread_times.empty()) {
+    if (all_thread_times.empty() || all_thread_times[0].empty()) {
         return BenchmarkMetrics{};
     }
 
     size_t num_threads = all_thread_times.size();
+    size_t num_iters = all_thread_times[0].size();
     BenchmarkMetrics metrics;
     metrics.thread_stats.resize(num_threads);
 
-    double sum_medians = 0.0;
-    double max_median = 0.0;
-    double min_median = 1e9;
-
+    // 1. Per-thread statistics for terminal visualization bars
     for (size_t t = 0; t < num_threads; ++t) {
         const auto &samples = all_thread_times[t];
         if (samples.empty()) continue;
@@ -66,15 +64,29 @@ inline BenchmarkMetrics compute_benchmark_metrics(const std::vector<std::vector<
         stats.stddev = std::sqrt(var_sum / samples.size());
 
         metrics.thread_stats[t] = stats;
-
-        sum_medians += stats.median;
-        if (stats.median > max_median) max_median = stats.median;
-        if (stats.median < min_median) min_median = stats.median;
     }
 
-    metrics.t_max = max_median;
-    metrics.t_min = (min_median == 1e9) ? 0.0 : min_median;
-    metrics.t_avg = sum_medians / num_threads;
+    // 2. Kernel execution duration: in each iteration r, the barrier-to-barrier runtime
+    // is dictated by the slowest thread in that iteration.
+    std::vector<double> iter_maxes(num_iters, 0.0);
+    std::vector<double> iter_avgs(num_iters, 0.0);
+
+    for (size_t r = 0; r < num_iters; ++r) {
+        double r_max = 0.0;
+        double r_sum = 0.0;
+        for (size_t t = 0; t < num_threads; ++t) {
+            double val = all_thread_times[t][r];
+            if (val > r_max) r_max = val;
+            r_sum += val;
+        }
+        iter_maxes[r] = r_max;
+        iter_avgs[r] = r_sum / num_threads;
+    }
+
+    metrics.t_max = calculate_median(iter_maxes);
+    metrics.t_avg = calculate_median(iter_avgs);
+    metrics.t_min = *std::min_element(iter_maxes.begin(), iter_maxes.end());
+
     if (metrics.t_max > 0.0) {
         metrics.imb_ratio = (metrics.t_max - metrics.t_avg) / metrics.t_max;
     }
