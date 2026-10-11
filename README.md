@@ -91,30 +91,21 @@ Sparsity: 99.6441%
 Working Set Size: 5.11 MB
 
 Thread Execution Times (Median ± StdDev):
-Thread  0 : [#########           ] 0.0092 ms  (± 0.0028 ms)
-Thread  1 : [###############     ] 0.0158 ms  (± 0.0043 ms)
-Thread  2 : [#################   ] 0.0178 ms  (± 0.0032 ms)
-Thread  3 : [################    ] 0.0167 ms  (± 0.0015 ms)
-Thread  4 : [################    ] 0.0165 ms  (± 0.0044 ms)
-Thread  5 : [##############      ] 0.0142 ms  (± 0.0191 ms)
-Thread  6 : [################    ] 0.0166 ms  (± 0.0145 ms)
-Thread  7 : [#################   ] 0.0174 ms  (± 0.0044 ms)
-Thread  8 : [################### ] 0.0197 ms  (± 0.0102 ms)
-Thread  9 : [####################] 0.0202 ms  (± 0.0083 ms)
-Thread 10 : [##################  ] 0.0191 ms  (± 0.0051 ms)
-Thread 11 : [##################  ] 0.0185 ms  (± 0.0043 ms)
-Thread 12 : [################### ] 0.0195 ms  (± 0.0091 ms)
-Thread 13 : [################### ] 0.0194 ms  (± 0.0036 ms)
-Thread 14 : [###############     ] 0.0154 ms  (± 0.0027 ms)
-Thread 15 : [############        ] 0.0126 ms  (± 0.0049 ms)
+Thread  0 : [########            ] 0.0087 ms  (± 0.0008 ms)
+Thread  1 : [###############     ] 0.0156 ms  (± 0.0006 ms)
+Thread  2 : [#################   ] 0.0172 ms  (± 0.0001 ms)
+...
+Thread 10 : [################### ] 0.0200 ms  (± 0.0016 ms)
+...
+Thread 15 : [#############       ] 0.0133 ms  (± 0.0000 ms)
 
 [METRICS (Median Across 50 Iterations)]
-  Execution Time (T_max) : 0.0202 ms
-  Average Time   (T_avg) : 0.0168 ms
-  Load Imbalance (λ)     : 0.1694
-  Compute Throughput     : 42.4143 GFLOP/s
-  Effective Bandwidth    : 265.3449 GB/s (L3 Cache-Resident)
-  Peak Memory (RSS)      : 16.00 MB
+  Execution Time (T_max) : 0.0200 ms
+  Average Time   (T_avg) : 0.0164 ms
+  Load Imbalance (λ)     : 0.1802
+  Compute Throughput     : 42.8500 GFLOP/s
+  Effective Bandwidth    : 268.0704 GB/s (L3 Cache-Resident)
+  Peak Memory (RSS)      : 16.0625 MB
 ```
 
 ---
@@ -175,19 +166,20 @@ Thread 10 : [################### ] 0.0141 ms  (± 0.0001 ms)
   Effective Bandwidth    : 219.1165 GB/s (L3 Cache-Resident)
 ```
 
-### Comparative Evaluation & Scheduling Trade-offs:
+### Comparative Evaluation Across Matrix Topologies:
 
-| Metric | 1. Row-Static | 2. Dynamic | 3. NNZ-Balanced (Workload-Aware) | Architectural Impact |
-| :--- | :---: | :---: | :---: | :--- |
-| **Execution Time ($T_{\max}$)** | 0.0169 ms | 0.0237 ms | **0.0141 ms** | 16.6% lower latency vs Static, 40.5% lower vs Dynamic |
-| **Load Imbalance ($\lambda$)** | 0.2041 | 0.1493 | **0.0238** | **88.3% imbalance reduction** |
-| **Compute Throughput** | 28.13 GFLOP/s | 20.02 GFLOP/s | **33.68 GFLOP/s** | +5.55 GFLOP/s throughput gain |
-| **Effective Bandwidth** | 183.0 GB/s | 130.3 GB/s | **219.1 GB/s** | Cache-resident throughput |
-| **Loop Scheduling Cost** | Static ($M/P$) | Atomic chunk counter | Precomputed static partition | Zero runtime lock contention |
+| Matrix & Topology | Scheduling Strategy | $T_{\max}$ (ms) | $T_{\text{avg}}$ (ms) | Imbalance ($\lambda$) | Throughput (GFLOP/s) |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **`bcsstk17`** (5.11 MB)<br>*Regular Structural FEM* | Static ($M/P$) | 0.0200 ms | 0.0164 ms | 0.1802 | 42.85 |
+| | Dynamic (16) | 0.0314 ms | 0.0248 ms | 0.2111 | 27.26 |
+| | **NNZ-Balanced** | **0.0169 ms** | 0.0165 ms | **0.0251** | **50.78** |
+| **`ca-HepPh`** (2.94 MB)<br>*Irregular Power-Law Graph* | Static ($M/P$) | 0.0169 ms | 0.0134 ms | 0.2041 | 28.13 |
+| | Dynamic (16) | 0.0237 ms | 0.0201 ms | 0.1493 | 20.02 |
+| | **NNZ-Balanced** | **0.0141 ms** | 0.0137 ms | **0.0238** | **33.68** |
 
-#### Latency Analysis:
-* **Dynamic Scheduling Overhead at Microsecond Scale:** In sub-millisecond SpMV execution ($< 0.025$ ms), the coordination cost of centralized atomic loop iteration counters causes observable latency increase ($0.0169 \to 0.0237$ ms).
-* **NNZ-Balanced Static Partitioning:** Precomputing non-zero boundaries once outside the parallel region allows threads to execute deterministic, balanced row spans without dynamic coordination overhead, mitigating both row-degree topological skew and scheduler overhead.
+#### Key Architectural Findings:
+* **Consistent Imbalance Reduction:** Across both regular structural FEM and power-law graph topologies, NNZ-balanced partitioning reduces load imbalance factor down to $\lambda \approx 0.024 - 0.025$, ensuring threads reach the barrier simultaneously.
+* **Microsecond Scheduling Overhead:** For cache-resident working sets completing in $< 0.03$ ms, OpenMP `schedule(dynamic)` exhibits 1.5x–1.8x higher execution latency due to centralized atomic iteration counter coordination compared to static partitioning.
 
 ---
 
@@ -267,7 +259,7 @@ cmake --build build
 ./build/spmv-inspect data/ca-HepPh/ca-HepPh.mtx 16 nnz
 
 # Run external SciPy C-kernel baseline benchmark
-python3 scripts/verify_baseline.py data/ca-HepPh/ca-HepPh.mtx
+python3 scripts/benchmark_scipy.py data/ca-HepPh/ca-HepPh.mtx
 ```
 
 ### Downloading Benchmark Datasets (Optional)
@@ -297,7 +289,7 @@ spmv-inspect/
 ├── samples/
 │   └── tiny.mtx            # 3x3 verification matrix fixture
 ├── scripts/
-│   └── verify_baseline.py  # SciPy C-kernel baseline benchmark script
+│   └── benchmark_scipy.py  # SciPy C-kernel baseline benchmark script
 └── src/
     └── main.cpp            # Command-line interface driver
 ```

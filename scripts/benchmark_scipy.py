@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/verify_baseline.py
+scripts/benchmark_scipy.py
 --------------------------
 External SciPy CSR Baseline Benchmark for spmv-inspect.
 Benchmarks SciPy's optimized C-accelerated CSR SpMV kernel on the same
