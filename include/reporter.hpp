@@ -21,7 +21,7 @@ inline void print_report(
 )
 {
     double total_elements = static_cast<double>(A.num_rows) * A.num_cols;
-    double sparsity = (1.0 - (static_cast<double>(A.nnz) / total_elements)) * 100.0;
+    double sparsity = (total_elements > 0.0) ? (1.0 - (static_cast<double>(A.nnz) / total_elements)) * 100.0 : 0.0;
     
     double gflops = (metrics.t_max > 0.0) ? (2.0 * A.nnz) / (metrics.t_max * 1e9) : 0.0;
     double bytes_transferred = (A.num_rows + 1) * sizeof(int)
@@ -46,7 +46,7 @@ inline void print_report(
         double t = results.thread_times[i];
         int num_blocks = (metrics.t_max > 0.0) ? static_cast<int>((t / metrics.t_max) * bar_width) : 0;
         num_spaces = bar_width - num_blocks;
-        std::cout << "Thread " << i << " : [";
+        std::cout << "Thread " << std::setw(2) << i << " : [";
         for (int b = 0; b < num_blocks; ++b) std::cout << "#";
         for (int s = 0; s < num_spaces; ++s) std::cout << " ";
         std::cout << "] " << (t * 1000.0) << " ms\n";

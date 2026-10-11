@@ -22,9 +22,9 @@ struct CSRMatrix {
 inline CSRMatrix coo_to_csr(COOMatrix &coo){
 
     std::sort(coo.elements.begin(), coo.elements.end(), [](const COOElement& a, const COOElement& b) {
-    if (a.row != b.row) return a.row < b.row;
+        if (a.row != b.row) return a.row < b.row;
         return a.col < b.col;
-});
+    });
 
     std::vector<int> row_ptr(coo.num_rows+1,0);
     std::vector<int> col_idx;

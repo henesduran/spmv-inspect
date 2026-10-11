@@ -16,7 +16,13 @@ int main(int argc, char* argv[]) {
         ScheduleType sched = ScheduleType::Static;
 
         if (argc > 1) {
-            filename = argv[1];
+            std::string arg1 = argv[1];
+            if (arg1 == "--help" || arg1 == "-h") {
+                std::cout << "Usage: " << argv[0] << " [matrix_path.mtx] [num_threads] [static|dynamic]\n";
+                std::cout << "Default: " << argv[0] << " samples/tiny.mtx <max_threads> static\n";
+                return 0;
+            }
+            filename = arg1;
         }
 
         if (argc > 2) {

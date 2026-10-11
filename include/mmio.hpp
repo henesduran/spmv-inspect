@@ -31,16 +31,19 @@ inline COOMatrix read_matrix(const std::string& filepath){
         throw std::runtime_error("Cannot open file: " + filepath);
     }
     std::string line;
-    std::getline(file,line);
+    std::getline(file, line);
+    for (char &ch : line) ch = static_cast<char>(std::tolower(ch));
     bool is_symmetric = line.find("symmetric") != std::string::npos;
     bool is_pattern = line.find("pattern") != std::string::npos;
     
-    while(getline(file,line)){
-        if(line[0] != '%') break;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        if (line[0] != '%') break;
     }
     std::stringstream ss(line);
     
-    int num_rows,num_cols,nnz;
+    int num_rows = 0, num_cols = 0;
+    size_t nnz = 0;
     ss >> num_rows >> num_cols >> nnz;
 
     std::vector<COOElement> elements;
