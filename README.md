@@ -66,7 +66,7 @@ bounds[i] = static_cast<int>(it - A.row_ptr.begin());
 
 Each thread $t$ directly processes row interval `[bounds[t], bounds[t+1])` without dynamic task queues or runtime lock contention.
 
-> **Boundary Condition:** 1D row-based NNZ partitioning guarantees uniform arithmetic balance provided that the maximum row degree satisfies $d_{\max} \le \frac{NNZ}{P}$. In `ca-HepPh`, $d_{\max} \approx 491 \ll \frac{237,010}{16} \approx 14,813$, ensuring balanced thread chunks without requiring 2D matrix decomposition.
+> **1D Partitioning Note:** Because partitioning is performed along row boundaries, individual rows are not split across threads. This 1D decomposition achieves uniform balance as long as the maximum single-row degree is smaller than the average non-zeros per thread ($NNZ / P$). In `ca-HepPh`, the maximum degree is ~491, which easily fits within the ~14,813 non-zeros assigned per thread.
 
 ---
 
@@ -76,7 +76,7 @@ Evaluated on **AMD Ryzen 7 8845HS (Zen 4, 8 Cores / 16 Threads, 16 MB L3 Cache)*
 
 > **Methodology:** Every test executes **10 untimed warmup iterations** followed by **50 timed measurement iterations**. Reported figures represent per-thread **Medians and Standard Deviations ($\pm \sigma$)**, filtering out OS scheduling interrupts and cold-cache effects.
 
-### 1. Regular Uniform Matrix: `bcsstk17.mtx` (Structural Engineering)
+### 1. Structural FEM Matrix: `bcsstk17.mtx` (Structural Engineering)
 * **Dimensions:** 10,974 x 10,974 | **NNZ:** 428,650 | **Sparsity:** 99.64% | **Working Set:** 5.11 MB (Fits in 16 MB L3)
 
 ```text
@@ -170,7 +170,7 @@ Thread 10 : [################### ] 0.0141 ms  (± 0.0001 ms)
 
 | Matrix & Topology | Scheduling Strategy | $T_{\max}$ (ms) | $T_{\text{avg}}$ (ms) | Imbalance ($\lambda$) | Throughput (GFLOP/s) |
 | :--- | :--- | :---: | :---: | :---: | :---: |
-| **`bcsstk17`** (5.11 MB)<br>*Regular Structural FEM* | Static ($M/P$) | 0.0200 ms | 0.0164 ms | 0.1802 | 42.85 |
+| **`bcsstk17`** (5.11 MB)<br>*Structural FEM* | Static ($M/P$) | 0.0200 ms | 0.0164 ms | 0.1802 | 42.85 |
 | | Dynamic (16) | 0.0314 ms | 0.0248 ms | 0.2111 | 27.26 |
 | | **NNZ-Balanced** | **0.0169 ms** | 0.0165 ms | **0.0251** | **50.78** |
 | **`ca-HepPh`** (2.94 MB)<br>*Irregular Power-Law Graph* | Static ($M/P$) | 0.0169 ms | 0.0134 ms | 0.2041 | 28.13 |
@@ -178,28 +178,26 @@ Thread 10 : [################### ] 0.0141 ms  (± 0.0001 ms)
 | | **NNZ-Balanced** | **0.0141 ms** | 0.0137 ms | **0.0238** | **33.68** |
 
 #### Key Architectural Findings:
-* **Consistent Imbalance Reduction:** Across both regular structural FEM and power-law graph topologies, NNZ-balanced partitioning reduces load imbalance factor down to $\lambda \approx 0.024 - 0.025$, ensuring threads reach the barrier simultaneously.
-* **Microsecond Scheduling Overhead:** For cache-resident working sets completing in $< 0.03$ ms, OpenMP `schedule(dynamic)` exhibits 1.5x–1.8x higher execution latency due to centralized atomic iteration counter coordination compared to static partitioning.
+* **Consistent Imbalance Reduction:** In `bcsstk17`, structural boundary nodes connect to fewer elements than interior junction nodes, producing moderate static imbalance ($\lambda = 0.1802$). In `ca-HepPh`, high-degree hub nodes create severe row skew ($\lambda = 0.2041$). Across both topologies, NNZ-balanced partitioning resolves degree variance and lowers load imbalance down to $\lambda \approx 0.024 - 0.025$.
+* **Dynamic Scheduling Overhead:** For small, cache-resident working sets completing in $< 0.03$ ms, OpenMP `schedule(dynamic)` exhibits 1.5x–1.8x higher execution latency due to centralized atomic iteration counter coordination compared to pre-partitioned static strategies.
 
 ---
 
-### 3. External Baseline Comparison & Strong Scaling Analysis
+### 3. Scaling & Speedup Analysis (`ca-HepPh.mtx`)
 
-To provide a standard reference point, `spmv-inspect` is benchmarked alongside **SciPy's C-implemented CSR SpMV kernel** (`scipy.sparse.csr_matrix.dot`) using the same evaluation protocol (10 warmup + 50 timed iterations, reporting median latency).
+Strong scaling evaluation across 16 threads compared to the sequential single-threaded baseline ($P=1$):
 
-#### Benchmark Configuration: `ca-HepPh.mtx` (12,008 x 12,008 | 237,010 NNZ) on AMD Ryzen 7 8845HS:
-
-| Implementation / Engine | Threads | Median Latency ($T$) | Compute Throughput | Notes / Scaling |
-| :--- | :---: | :---: | :---: | :--- |
-| **SciPy `csr_matrix` (C-Kernel)** | 1 | 0.1470 ms | 3.23 GFLOP/s | Single-threaded reference baseline |
-| **`spmv-inspect` (Sequential Baseline)** | 1 | 0.1379 ms | 3.44 GFLOP/s | Single-thread baseline ($1.07\times$ vs SciPy) |
-| **`spmv-inspect` (Row-Static)** | 16 | 0.0169 ms | 28.13 GFLOP/s | $8.16\times$ strong scaling ($S_{16}$) |
-| **`spmv-inspect` (Dynamic)** | 16 | 0.0237 ms | 20.02 GFLOP/s | $5.82\times$ strong scaling ($S_{16}$) |
-| **`spmv-inspect` (NNZ-Balanced)** | 16 | **0.0141 ms** | **33.68 GFLOP/s** | **$9.78\times$ strong scaling ($S_{16}$)** |
+| Configuration | Threads | Median Latency ($T_{\max}$) | Compute Throughput | Speedup ($S_{16}$) | Parallel Efficiency |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Sequential Baseline** | 1 | 0.1379 ms | 3.44 GFLOP/s | $1.00\times$ | 100.0% |
+| **Row-Static** | 16 | 0.0169 ms | 28.13 GFLOP/s | $8.16\times$ | 51.0% |
+| **Dynamic (16)** | 16 | 0.0237 ms | 20.02 GFLOP/s | $5.82\times$ | 36.4% |
+| **NNZ-Balanced** | 16 | **0.0141 ms** | **33.68 GFLOP/s** | **$9.78\times$** | **61.1%** |
 
 #### Key Insights:
-1. **Single-Thread Parity:** At $P = 1$, `spmv-inspect` (0.1379 ms) performs on par with SciPy's compiled C kernel (0.1470 ms), noting that at sub-millisecond latencies, Python function call overhead and result array allocation represent measurable factors.
-2. **Strong Scaling ($9.78\times$ on 8C/16T):** On an 8-core / 16-thread Zen 4 processor, NNZ-balanced partitioning achieves $9.78\times$ speedup over single-threaded execution ($61.1\%$ parallel efficiency across 16 hardware SMT threads). Beyond SMT throughput, this speedup benefits from aggregate private L2 cache capacity: Zen 4 provides 1 MB private L2 cache per core. While a single thread's 2.94 MB working set exceeds its local L2 (spilling to L3), distributing the matrix across cores allows thread-local data partitions (~0.18 MB) to fit comfortably within private L2 caches. Note that per-thread timers measure pure compute duration inside the OpenMP parallel construct, excluding outer thread fork/join overhead.
+1. **NNZ-Balanced Speedup ($9.78\times$):** By eliminating idle barrier waiting times across threads, NNZ-balanced partitioning achieves $9.78\times$ speedup on an 8-core / 16-thread processor ($61.1\%$ parallel efficiency across 16 hardware SMT threads).
+2. **Scheduling Trade-off:** Naive row-static scheduling leaves threads waiting on hub-heavy partitions ($8.16\times$ speedup), while dynamic scheduling suffers from atomic iteration counter contention on sub-millisecond cache-resident chunks ($5.82\times$ speedup).
+3. **Reference Single-Thread Latency:** For reference, a single-threaded SciPy CSR run (`scipy.sparse.csr_matrix.dot`) executes in ~0.147 ms on the same machine, confirming that the single-threaded C++ baseline (0.1379 ms) delivers expected bare-metal performance. Note that per-thread timers measure pure compute duration inside the OpenMP parallel construct, excluding outer thread fork/join overhead.
 
 ---
 
@@ -246,7 +244,7 @@ cmake --build build
 
 # Syntax: ./build/spmv-inspect <path_to_matrix.mtx> [threads] [static|dynamic|nnz]
 
-# Quick verification with included test fixture
+# Quick smoke test with included 3x3 fixture
 ./build/spmv-inspect samples/tiny.mtx 4 static
 
 # Run 16-thread benchmark with naive row-static schedule
@@ -258,7 +256,7 @@ cmake --build build
 # Run 16-thread benchmark with workload-aware NNZ-balanced partitioning
 ./build/spmv-inspect data/ca-HepPh/ca-HepPh.mtx 16 nnz
 
-# Run external SciPy C-kernel baseline benchmark
+# Run optional SciPy C-kernel reference benchmark
 python3 scripts/benchmark_scipy.py data/ca-HepPh/ca-HepPh.mtx
 ```
 
@@ -287,9 +285,9 @@ spmv-inspect/
 │   ├── metrics.hpp         # Load imbalance (λ) & POSIX getrusage memory reader
 │   └── reporter.hpp        # ASCII terminal bar-chart visualizer
 ├── samples/
-│   └── tiny.mtx            # 3x3 verification matrix fixture
+│   └── tiny.mtx            # 3x3 sample matrix fixture
 ├── scripts/
-│   └── benchmark_scipy.py  # SciPy C-kernel baseline benchmark script
+│   └── benchmark_scipy.py  # Optional SciPy C-kernel baseline benchmark
 └── src/
     └── main.cpp            # Command-line interface driver
 ```
