@@ -51,28 +51,26 @@ Thread 1 (Slow) : [==================== Work ===================] --> Measures T
 ```
 
 ### Workload-Aware Partitioning: NNZ-Balanced Partitioning
-Standard row-based static partitioning divides $M$ rows uniformly among $P$ threads ($\approx \frac{M}{P}$ rows/thread). In power-law graphs with skewed degree distributions (e.g., social, citation, and web networks), hub nodes concentrate thousands of non-zero entries into a handful of rows. This causes severe thread load imbalance ($\lambda \gg 0$) under naive static scheduling.
+Standard row-based static partitioning divides $M$ rows uniformly among $P$ threads ($\approx M/P$ rows/thread). In power-law graphs with skewed degree distributions (e.g., social, citation, and web networks), hub nodes concentrate thousands of non-zero entries into a handful of rows. This causes severe thread load imbalance ($\lambda \gg 0$) under naive static scheduling.
 
-`spmv-inspect` implements **NNZ-Balanced Static Partitioning** by partitioning non-zero entries ($NNZ$) equally rather than rows:
-$$\tau_i = \left\lfloor \frac{i \cdot NNZ}{P} \right\rfloor \quad \text{for } i \in [1, P-1]$$
+`spmv-inspect` implements **NNZ-Balanced Static Partitioning** by partitioning non-zero entries (`NNZ`) equally rather than rows:
+* **Target Non-Zeros per Thread:** `target_nnz = (i * NNZ) / P` for thread partition $i \in [1, P-1]$.
+* **Partition Boundary:** Smallest row index $r$ where `row_ptr[r] >= target_nnz`.
 
-Because the CSR `row_ptr` prefix-sum array is monotonically non-decreasing, partition boundaries are determined via binary search in $O(P \log M)$ preprocessing time:
-$$\text{bounds}[i] = \min \{ r \in [0, M] \mid \text{row\_ptr}[r] \ge \tau_i \}$$
-
-In C++, this is cleanly implemented using `std::lower_bound`:
+In C++, this is cleanly implemented in $O(P \log M)$ preprocessing time using `std::lower_bound`:
 ```cpp
 size_t target_nnz = (static_cast<size_t>(i) * A.nnz) / n_threads;
 auto it = std::lower_bound(A.row_ptr.begin(), A.row_ptr.end(), static_cast<int>(target_nnz));
 bounds[i] = static_cast<int>(it - A.row_ptr.begin());
 ```
 
-Each thread $t$ directly processes row interval $[\text{bounds}[t], \text{bounds}[t+1])$ without dynamic task queues or runtime lock contention.
+Each thread $t$ directly processes row interval `[bounds[t], bounds[t+1])` without dynamic task queues or runtime lock contention.
 
 > **Boundary Condition:** 1D row-based NNZ partitioning guarantees uniform arithmetic balance provided that the maximum row degree satisfies $d_{\max} \le \frac{NNZ}{P}$. In `ca-HepPh`, $d_{\max} \approx 491 \ll \frac{237,010}{16} \approx 14,813$, ensuring balanced thread chunks without requiring 2D matrix decomposition.
 
 ---
 
-## Benchmark Results (16 Threads Showdown)
+## Benchmark Results (16 Threads Evaluation)
 
 Evaluated on **AMD Ryzen 7 8845HS (Zen 4, 8 Cores / 16 Threads, 16 MB L3 Cache)** under Linux / WSL2 using matrices from the **SuiteSparse Matrix Collection**.
 
@@ -215,24 +213,18 @@ To provide a standard reference point, `spmv-inspect` is benchmarked alongside *
 
 ## Mathematical Metrics
 
-1. **Load Imbalance Factor ($\lambda$):**
-   $$\lambda = \frac{T_{\max} - T_{\text{avg}}}{T_{\max}}$$
-   Where $T_{\max} = \text{median}(\text{iter\_max})$ and $T_{\text{avg}} = \text{median}(\text{iter\_avg})$ across timed iterations, measuring barrier-to-barrier execution latency. $\lambda = 0.0$ indicates ideal load balance; $\lambda \to 1.0$ indicates severe thread serialization.
+```text
+Load Imbalance (λ)  = (T_max - T_avg) / T_max
+Compute Throughput  = (2 * NNZ) / (T_max * 1e9)  [GFLOP/s]
+Effective Bandwidth = Bytes / (T_max * 1e9)       [GB/s]
+  where Bytes       = (M + 1)*4 + NNZ*12 + N*8 + M*8 (Compulsory stream traffic)
+Strong Scaling (S)  = T_1 / T_P
+Parallel Efficiency = (S / P) * 100%
+```
 
-2. **Compute Throughput (GFLOP/s):**
-   $$\text{GFLOP/s} = \frac{2 \times NNZ}{T_{\max} \times 10^9}$$
-
-3. **Effective Memory Bandwidth (GB/s):**
-   $$\text{Bytes} = (M + 1) \times 4 + NNZ \times (4 + 8) + N \times 8 + M \times 8$$
-   $$\text{Bandwidth} = \frac{\text{Bytes}}{T_{\max} \times 10^9}$$
-   *Note: Represents compulsory algorithmic stream traffic. For cache-resident working sets ($\le 16$ MB L3), this quantifies on-chip L3 cache throughput rather than physical DRAM saturation.*
-
-4. **Physical Memory Footprint (RSS):**
-   Queried directly from the Linux kernel using `getrusage(RUSAGE_SELF, &usage)` via `usage.ru_maxrss`.
-
-5. **Strong Scaling Speedup & Parallel Efficiency:**
-   $$S_P = \frac{T_1}{T_P}, \quad E_P = \frac{S_P}{P} \times 100\%$$
-   Where $T_1$ is single-threaded runtime and $P$ is hardware thread count.
+* **`T_max` & `T_avg`:** Computed as the median of per-iteration maximum and average thread runtimes across timed benchmark iterations, measuring pure barrier-to-barrier parallel execution latency.
+* **Effective Bandwidth:** Quantifies compulsory algorithmic stream traffic. For cache-resident working sets ($\le 16$ MB L3), this measures on-chip L3 throughput rather than physical DRAM bus saturation.
+* **Physical Memory Footprint (RSS):** Queried directly from the Linux kernel using POSIX `getrusage(RUSAGE_SELF, &usage)` via `usage.ru_maxrss`.
 
 ---
 
