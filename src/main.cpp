@@ -20,7 +20,7 @@ int main(int argc, char* argv[]) {
         if (argc > 1) {
             std::string arg1 = argv[1];
             if (arg1 == "--help" || arg1 == "-h") {
-                std::cout << "Usage: " << argv[0] << " [matrix_path.mtx] [num_threads] [static|dynamic]\n";
+                std::cout << "Usage: " << argv[0] << " [matrix_path.mtx] [num_threads] [static|dynamic|nnz]\n";
                 std::cout << "Default: " << argv[0] << " samples/tiny.mtx <max_threads> static (10 warmup, 50 bench iters)\n";
                 return 0;
             }
@@ -35,7 +35,14 @@ int main(int argc, char* argv[]) {
         }
 
         if (argc > 3) {
-            sched = (std::string(argv[3]) == "dynamic") ? ScheduleType::Dynamic : ScheduleType::Static;
+            std::string arg3 = argv[3];
+            if (arg3 == "dynamic") {
+                sched = ScheduleType::Dynamic;
+            } else if (arg3 == "nnz" || arg3 == "nnz-balanced") {
+                sched = ScheduleType::NnzBalanced;
+            } else {
+                sched = ScheduleType::Static;
+            }
         }
 
         auto coo = read_matrix(filename);

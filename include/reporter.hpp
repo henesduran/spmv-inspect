@@ -56,7 +56,12 @@ inline void print_benchmark_report(
     std::cout << "Protocol: " << warmup_iters << " warmup + " << bench_iters << " timed iterations (reporting Median ± StdDev)\n";
     std::cout << "Matrix: " << matrix_name << "\n";
     std::cout << "Threads: " << num_threads << "\n";
-    std::cout << "Schedule: " << (sched == ScheduleType::Static ? "STATIC" : "DYNAMIC") << "\n";
+
+    std::string sched_str = "STATIC";
+    if (sched == ScheduleType::Dynamic) sched_str = "DYNAMIC";
+    else if (sched == ScheduleType::NnzBalanced) sched_str = "NNZ-BALANCED";
+    
+    std::cout << "Schedule: " << sched_str << "\n";
     std::cout << "Dimensions: " << A.num_rows << " x " << A.num_cols << "\n";
     std::cout << "Non-Zero Elements: " << A.nnz << "\n";
     std::cout << "Sparsity: " << sparsity << "%\n";

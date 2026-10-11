@@ -11,7 +11,7 @@ Sparse Matrix-Vector Multiplication ($y = A \cdot x$) is one of the most critica
 
 `spmv-inspect` is an end-to-end performance inspection tool that analyzes:
 1. **Thread-Level Load Imbalance ($\lambda$):** Quantifies work distribution across CPU cores in real-world graphs.
-2. **Scheduling Trade-offs:** Benchmarks `static` versus `dynamic` OpenMP work-sharing on uniform versus power-law sparse matrices.
+2. **Scheduling & Partitioning Trade-offs:** Benchmarks `static` (row-based), `dynamic` (work-stealing), and `nnz` (workload-aware NNZ-balanced static partitioning) on uniform versus power-law sparse matrices.
 3. **False Sharing Avoidance:** Employs thread-isolated timing registers to prevent L1/L2 cache-line invalidation storms.
 4. **Barrier Wait-Time Isolation (`nowait`):** Eliminates OpenMP worksharing implicit barriers to measure pure CPU compute time rather than idle barrier synchronization wait.
 5. **Hardware Performance Metrics:** Computes GFLOP/s compute throughput, memory bandwidth (GB/s), and queries Linux kernel physical resident memory (RSS via `getrusage`).
@@ -49,6 +49,19 @@ With nowait & Entry Barrier (Pure Computation Time):
 Thread 0 (Fast) : [==== Work ====] --> Measures T_0 (Pure Work!)
 Thread 1 (Slow) : [==================== Work ===================] --> Measures T_1 (Bottleneck!)
 ```
+
+### Workload-Aware Partitioning: NNZ-Balanced Partitioning
+Standard row-based static partitioning divides $M$ rows uniformly among $P$ threads ($\approx \frac{M}{P}$ rows/thread). In power-law graphs with skewed degree distributions (e.g., social, citation, and web networks), hub nodes concentrate thousands of non-zero entries into a handful of rows. This causes severe thread load imbalance ($\lambda \gg 0$) under naive static scheduling.
+
+`spmv-inspect` implements **NNZ-Balanced Static Partitioning** by partitioning the non-zero elements ($NNZ$) equally rather than rows:
+$$\text{target\_nnz}_i = \left\lfloor \frac{i \times NNZ}{P} \right\rfloor \quad \text{for } i \in [1, P-1]$$
+
+Since the CSR `row_ptr` array is monotonically non-decreasing, we compute optimal row boundaries using a left binary search (`std::lower_bound`) on `row_ptr` in $O(P \log M)$ precomputation time:
+$$\text{bounds}[i] = \text{std::lower\_bound}(\text{row\_ptr.begin}(), \text{row\_ptr.end}(), \text{target\_nnz}_i) - \text{row\_ptr.begin}()$$
+
+Thread $t$ executes its assigned row range $[\text{bounds}[t], \text{bounds}[t+1])$ directly. This achieves:
+1. **Zero Runtime Coordination:** Precomputed once before execution; requires zero atomic work queues, locks, or dynamic scheduling overhead.
+2. **Deterministic Arithmetic Balancing:** Every thread performs approximately $\frac{NNZ}{P}$ multiply-accumulate operations, eliminating structural tail latency.
 
 ---
 
@@ -104,50 +117,74 @@ Thread 15 : [############        ] 0.0126 ms  (± 0.0049 ms)
 ### 2. Irregular Power-Law Graph: `ca-HepPh.mtx` (ArXiv Collaboration Network)
 * **Dimensions:** 12,008 x 12,008 | **NNZ:** 237,010 | **Sparsity:** 99.83% | **Working Set:** 2.94 MB (Fits in 16 MB L3)
 
-#### Static Scheduling (`schedule(static)`): Row-Partitioning Skew
-Static row-chunk assignment assigns equal row counts regardless of non-zero densities:
+#### Method 1: Naive Row-Static Scheduling (`schedule(static)`)
+Equal row counts ($M / P$) assigned regardless of graph topology:
 ```text
 Thread Execution Times (Median ± StdDev):
-Thread  0 : [##############      ] 0.0121 ms  (± 0.0006 ms)
-Thread  1 : [##################  ] 0.0154 ms  (± 0.0007 ms)
+Thread  0 : [##############      ] 0.0131 ms  (± 0.0017 ms)
+Thread  1 : [###############     ] 0.0136 ms  (± 0.0010 ms)
 ...
-Thread  6 : [####################] 0.0170 ms  (± 0.0019 ms)  <-- Dense author cluster
+Thread  6 : [####################] 0.0175 ms  (± 0.0014 ms)  <-- Hub node bottleneck
 ...
-Thread 14 : [##########          ] 0.0091 ms  (± 0.0063 ms)
-
+Thread  9 : [############        ] 0.0107 ms  (± 0.0010 ms)  <-- Starving thread
+...
 [METRICS (Median Across 50 Iterations)]
-  Execution Time (T_max) : 0.0170 ms
-  Average Time   (T_avg) : 0.0139 ms
-  Load Imbalance (λ)     : 0.1868
-  Compute Throughput     : 27.8230 GFLOP/s
-  Effective Bandwidth    : 181.0345 GB/s (L3 Cache-Resident)
+  Execution Time (T_max) : 0.0175 ms
+  Average Time   (T_avg) : 0.0142 ms
+  Load Imbalance (λ)     : 0.1900
+  Compute Throughput     : 27.1303 GFLOP/s
+  Effective Bandwidth    : 176.5272 GB/s (L3 Cache-Resident)
 ```
 
-#### Dynamic Scheduling (`schedule(dynamic, 16)`): Near-Perfect Balance
-Dynamic work-stealing smooths execution times across all 16 workers, reducing load imbalance ($\lambda$) by **87.7%**:
+#### Method 2: Dynamic Scheduling (`schedule(dynamic, 16)`)
+OpenMP dynamic work-stealing queues eliminate computational imbalance ($\lambda \to 0.0072$) but incur runtime synchronization overhead:
 ```text
 Thread Execution Times (Median ± StdDev):
-Thread  0 : [################### ] 0.0231 ms  (± 0.0069 ms)
-Thread  1 : [################### ] 0.0233 ms  (± 0.0058 ms)
-Thread  2 : [################### ] 0.0230 ms  (± 0.0053 ms)
+Thread  0 : [################### ] 0.0190 ms  (± 0.0006 ms)
+Thread  1 : [################### ] 0.0193 ms  (± 0.0006 ms)
 ...
-Thread 15 : [################### ] 0.0228 ms  (± 0.0097 ms)  <-- Uniform execution!
+Thread 15 : [####################] 0.0194 ms  (± 0.0019 ms)  <-- Uniform execution
 
 [METRICS (Median Across 50 Iterations)]
-  Execution Time (T_max) : 0.0234 ms
-  Average Time   (T_avg) : 0.0229 ms
-  Load Imbalance (λ)     : 0.0229  (Load Imbalance Slashed to ~2%!)
-  Compute Throughput     : 20.2625 GFLOP/s
-  Effective Bandwidth    : 131.8408 GB/s (L3 Cache-Resident)
+  Execution Time (T_max) : 0.0194 ms  (Slower than Static due to queue contention!)
+  Average Time   (T_avg) : 0.0193 ms
+  Load Imbalance (λ)     : 0.0072
+  Compute Throughput     : 24.3888 GFLOP/s
+  Effective Bandwidth    : 158.6892 GB/s (L3 Cache-Resident)
 ```
 
-### Performance Characteristics & Takeaways:
+#### Method 3: NNZ-Balanced Static Partitioning (`ScheduleType::NnzBalanced`)
+Workload-aware partition based on CSR `row_ptr` prefix-sum binary search:
+```text
+Thread Execution Times (Median ± StdDev):
+Thread  0 : [################### ] 0.0138 ms  (± 0.0013 ms)
+Thread  1 : [################### ] 0.0135 ms  (± 0.0020 ms)
+...
+Thread 13 : [####################] 0.0142 ms  (± 0.0012 ms)
+...
+[METRICS (Median Across 50 Iterations)]
+  Execution Time (T_max) : 0.0142 ms  (Fastest execution!)
+  Average Time   (T_avg) : 0.0138 ms
+  Load Imbalance (λ)     : 0.0253  (86.7% Imbalance Reduction vs Static)
+  Compute Throughput     : 33.4961 GFLOP/s  (+23.5% vs Static, +37.3% vs Dynamic)
+  Effective Bandwidth    : 217.9475 GB/s (L3 Cache-Resident)
+```
 
-| Metric | Static Scheduling (`ca-HepPh`) | Dynamic Scheduling (`ca-HepPh`) | Impact |
-| :--- | :--- | :--- | :--- |
-| **Load Imbalance Factor ($\lambda$)** | **0.1868** | **0.0229** | **87.7% Imbalance Reduction** |
-| **Thread Variance ($\sigma$)** | Higher variance across threads | Uniform ($\approx 0.023$ ms across all 16 cores) | Ideal load distribution |
-| **Working Set Location** | L3 Cache-Resident (2.94 MB < 16 MB L3) | L3 Cache-Resident (2.94 MB < 16 MB L3) | Zero DRAM bottleneck |
+### Three-Way Performance Showdown & HPC Trade-offs:
+
+| Metric | 1. Row-Static | 2. Dynamic | 3. NNZ-Balanced (Workload-Aware) | Architectural Impact |
+| :--- | :---: | :---: | :---: | :--- |
+| **Execution Time ($T_{\max}$)** | 0.0175 ms | 0.0194 ms | **0.0142 ms** | **18.9% faster than Static, 26.8% faster than Dynamic** |
+| **Load Imbalance ($\lambda$)** | 0.1900 | **0.0072** | **0.0253** | **86.7% Imbalance Reduction without dynamic overhead** |
+| **Compute Throughput** | 27.13 GFLOP/s | 24.39 GFLOP/s | **33.50 GFLOP/s** | **Optimal throughput frontier (+6.37 GFLOP/s)** |
+| **Effective Bandwidth** | 176.5 GB/s | 158.7 GB/s | **217.9 GB/s** | **Peak L3 bandwidth saturation** |
+| **Coordination Overhead** | None | High (Atomic queues) | **Zero (Precomputed prefix-sum)** | **No thread contention on work queues** |
+
+#### Why Dynamic Scheduling Regressed in Latency ($0.0175 \to 0.0194$ ms):
+While OpenMP dynamic scheduling achieved near-zero arithmetic imbalance ($\lambda = 0.0072$), total runtime increased by $10.9\%$. In sub-millisecond SpMV kernels ($< 0.02$ ms), the atomic memory contention of work-stealing from the central task pool exceeds the computation time saved by balancing rows.
+
+#### Why NNZ-Balanced Dominated Both:
+By mapping the non-zero partition to the monotonically non-decreasing `row_ptr` prefix-sum array, binary search determines non-zero boundaries in $O(P \log M)$ preprocessing time. In the parallel kernel, every worker thread iterates over its designated row span with zero atomic locks and zero branch divergence, simultaneously eliminating both the topological imbalance of static scheduling and the synchronization overhead of dynamic scheduling.
 
 ---
 
@@ -194,16 +231,19 @@ cmake --build build
 # Display CLI usage
 ./build/spmv-inspect --help
 
-# Syntax: ./build/spmv-inspect <path_to_matrix.mtx> [threads] [static|dynamic]
+# Syntax: ./build/spmv-inspect <path_to_matrix.mtx> [threads] [static|dynamic|nnz]
 
 # Quick verification with included test fixture
 ./build/spmv-inspect samples/tiny.mtx 4 static
 
-# Run 16-thread benchmark with static schedule
+# Run 16-thread benchmark with naive row-static schedule
 ./build/spmv-inspect data/ca-HepPh/ca-HepPh.mtx 16 static
 
-# Run 16-thread benchmark with dynamic schedule
+# Run 16-thread benchmark with dynamic work-stealing schedule
 ./build/spmv-inspect data/ca-HepPh/ca-HepPh.mtx 16 dynamic
+
+# Run 16-thread benchmark with workload-aware NNZ-balanced partitioning
+./build/spmv-inspect data/ca-HepPh/ca-HepPh.mtx 16 nnz
 ```
 
 ### Downloading Benchmark Datasets (Optional)
