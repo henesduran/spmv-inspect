@@ -1,3 +1,5 @@
+![spmv-inspect](spmv_banner.jpg)
+
 # spmv-inspect
 
 **Sparse Matrix Thread-Level Profiler & Memory Inspector**  
